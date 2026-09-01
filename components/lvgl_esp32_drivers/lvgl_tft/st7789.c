@@ -229,7 +229,19 @@ void st7789_flush(lv_disp_drv_t * drv, const lv_area_t * area, lv_color_t * colo
         offsetx1 += 35;
         offsetx2 += 35;
     #endif
+#elif (LV_HOR_RES_MAX == 320) && (LV_VER_RES_MAX == 172)
+    #if (CONFIG_LV_DISPLAY_ORIENTATION_LANDSCAPE)
+        offsety1 += 34;
+        offsety2 += 34;
+    #elif (CONFIG_LV_DISPLAY_ORIENTATION_LANDSCAPE_INVERTED)
+        offsety1 += 34;
+        offsety2 += 34;
+    #elif (CONFIG_LV_DISPLAY_ORIENTATION_PORTRAIT)
+        offsetx1 += 34;
+        offsetx2 += 34;
+    #endif
 #endif
+
     /*Column addresses*/
     st7789_send_cmd(ST7789_CASET);
     data[0] = (offsetx1 >> 8) & 0xFF;
