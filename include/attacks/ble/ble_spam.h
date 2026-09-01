@@ -48,4 +48,28 @@ void ble_spam_stop(void);
  */
 bool ble_spam_is_running(void);
 
+/**
+ * @brief Set the HID keyboard payload script to execute on device connection
+ * 
+ * When a device connects to the BLE spam attack advertising as a keyboard,
+ * this script will be executed automatically. Script follows BadBLE syntax
+ * (e.g., "DELAY 100", "STRING Hello", "WINDOW R", "ENTER", etc.)
+ * 
+ * @param script Null-terminated script string. If NULL, disables payload execution.
+ *               Memory is copied internally, caller retains ownership.
+ * @return true if script was set successfully, false otherwise
+ */
+bool ble_spam_set_payload(const char *script);
+
+/**
+ * @brief Enable connection acceptance for the BLE spam attack
+ * 
+ * When enabled, BLE spam will accept incoming connections and act as a
+ * HID keyboard device, executing the configured payload script on connection.
+ * Requires a payload script to be set via ble_spam_set_payload().
+ * 
+ * @param enable true to accept connections, false to revert to advertisement-only
+ */
+void ble_spam_set_accept_connections(bool enable);
+
 #endif // BLE_SPAM_H
