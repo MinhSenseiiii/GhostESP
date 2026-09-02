@@ -229,6 +229,16 @@ void st7789_flush(lv_disp_drv_t * drv, const lv_area_t * area, lv_color_t * colo
         offsetx1 += 35;
         offsetx2 += 35;
     #endif
+#elif (LV_HOR_RES_MAX == 172) && (LV_VER_RES_MAX == 320) // 1.47/1.9 inch 172x320 LCD, vertical frame
+    #if (CONFIG_LV_DISPLAY_ORIENTATION_LANDSCAPE) || (CONFIG_LV_DISPLAY_ORIENTATION_LANDSCAPE_INVERTED)
+        offsetx1 += 34;
+        offsetx2 += 34;
+    #endif
+#elif (LV_HOR_RES_MAX == 320) && (LV_VER_RES_MAX == 172) // 1.47/1.9 inch 172x320 LCD, landscape frame
+    #if (CONFIG_LV_DISPLAY_ORIENTATION_PORTRAIT) || (CONFIG_LV_DISPLAY_ORIENTATION_PORTRAIT_INVERTED)
+        offsety1 += 34;
+        offsety2 += 34;
+    #endif
 #endif
     /*Column addresses*/
     st7789_send_cmd(ST7789_CASET);
@@ -252,7 +262,6 @@ void st7789_flush(lv_disp_drv_t * drv, const lv_area_t * area, lv_color_t * colo
     size_t size = (size_t)lv_area_get_width(area) * (size_t)lv_area_get_height(area);
 
     st7789_send_color((void*)color_map, size * 2);
-
 }
 
 /**********************
