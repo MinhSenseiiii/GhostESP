@@ -687,7 +687,7 @@ static void handshake_deauth_task(void *param) {
 
 void deauth_attack_start_handshake_deauth(void) {
     if (handshake_deauth_task_running) {
-        glog("Handshake+Deauth already running.\n");
+        // glog("Handshake+Deauth already running.\n");
         return;
     }
 
@@ -728,7 +728,7 @@ void deauth_attack_start_handshake_deauth(void) {
     // Attack radio profile: STA-only mode (GhostNet AP off, clients kicked)
     // + wide/LR protocols (enables 5GHz TX, frees channel hopping)
     ESP_ERROR_CHECK(ap_manager_apply_attack_radio());
-    printf("Restarting Wi-Fi for Handshake+Deauth\n");
+    // printf("Restarting Wi-Fi for Handshake+Deauth\n");
 
     // Enable promiscuous mode for EAPOL capture (on top of AP mode)
     wifi_callbacks_reset_handshake_tracking();
@@ -739,9 +739,9 @@ void deauth_attack_start_handshake_deauth(void) {
     // Start Wireshark stream for EAPOL capture
     int pcap_err = pcap_wireshark_start(PCAP_CAPTURE_WIFI);
     if (pcap_err != ESP_OK) {
-        glog("Warning: Wireshark stream failed to start, continuing without capture\n");
+        // glog("Warning: Wireshark stream failed to start, continuing without capture\n");
     } else {
-        glog("Wireshark live streaming enabled for handshake recording\n");
+        // glog("Wireshark live streaming enabled for handshake recording\n");
     }
 
     // Build channel list for handshake deauth (user hop profile or the
@@ -776,7 +776,7 @@ void deauth_attack_start_handshake_deauth(void) {
             selected_aps_local = NULL;
             selected_ap_count_local = 0;
         }
-        glog("Starting Handshake+Deauth on station (AP: %s)\n", sanitized_ssid);
+        // glog("Starting Handshake+Deauth on station (AP: %s)\n", sanitized_ssid);
 #ifdef CONFIG_WITH_STATUS_DISPLAY
         status_display_show_attack("HS+Deauth", sanitized_ssid);
 #endif
@@ -789,11 +789,11 @@ void deauth_attack_start_handshake_deauth(void) {
         selected_ap_count_local = selected_ap_count;
 
         if (selected_ap_count_local > 0 && selected_aps_local != NULL) {
-            glog("Starting Handshake+Deauth on %d APs:\n", selected_ap_count_local);
+            // glog("Starting Handshake+Deauth on %d APs:\n", selected_ap_count_local);
             for (int i = 0; i < selected_ap_count_local; i++) {
                 char sanitized_ssid[33];
                 sanitize_ssid(selected_aps_local[i].ssid, sanitized_ssid, sizeof(sanitized_ssid));
-                glog("  [%d] %s\n", i, sanitized_ssid);
+                // glog("  [%d] %s\n", i, sanitized_ssid);
 #ifdef CONFIG_WITH_STATUS_DISPLAY
                 if (i == 0) status_display_show_attack("HS+Deauth", sanitized_ssid);
 #endif
@@ -801,7 +801,7 @@ void deauth_attack_start_handshake_deauth(void) {
         } else if (strlen((const char *)selected_ap_local.ssid) > 0) {
             char sanitized_ssid[33];
             sanitize_ssid(selected_ap_local.ssid, sanitized_ssid, sizeof(sanitized_ssid));
-            glog("Starting Handshake+Deauth on: %s\n", sanitized_ssid);
+            // glog("Starting Handshake+Deauth on: %s\n", sanitized_ssid);
 #ifdef CONFIG_WITH_STATUS_DISPLAY
             status_display_show_attack("HS+Deauth", sanitized_ssid);
 #endif
@@ -811,7 +811,7 @@ void deauth_attack_start_handshake_deauth(void) {
     handshake_deauth_handshake_count = 0;
 
     if (handshake_deauth_stop_requested) {
-        glog("Handshake+Deauth cancelled before start.\n");
+        // glog("Handshake+Deauth cancelled before start.\n");
         handshake_deauth_stop_requested = false;
         esp_wifi_set_promiscuous(false);
         pcap_wireshark_stop();
@@ -822,7 +822,7 @@ void deauth_attack_start_handshake_deauth(void) {
 
     BaseType_t rc = xTaskCreate_psram(handshake_deauth_task, "hs_deauth_task", 4096, NULL, 5, &handshake_deauth_task_handle);
     if (rc != pdPASS) {
-        glog("Failed to start handshake+deauth task (%ld)\n", (long)rc);
+        // glog("Failed to start handshake+deauth task (%ld)\n", (long)rc);
         status_display_show_status("HS+Deauth Fail");
         handshake_deauth_task_handle = NULL;
         handshake_deauth_stop_requested = false;
@@ -835,7 +835,7 @@ void deauth_attack_start_handshake_deauth(void) {
     handshake_deauth_task_running = true;
     rgb_manager_set_color(&rgb_manager, -1, 255, 128, 0, false);
     ghostscript_emit_event("attack_started", "handshake_deauth");
-    glog("Handshake+Deauth running. Use 'stopdeauth' or 'stop' to end.\n");
+    // glog("Handshake+Deauth running. Use 'stopdeauth' or 'stop' to end.\n");
 }
 
 bool deauth_attack_stop_handshake_deauth(void) {
