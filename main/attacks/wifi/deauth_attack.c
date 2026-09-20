@@ -736,12 +736,12 @@ void deauth_attack_start_handshake_deauth(void) {
     esp_wifi_set_promiscuous(true);
     esp_wifi_set_promiscuous_rx_cb(wifi_eapol_scan_callback);
 
-    // Open PCAP file for EAPOL capture
-    int pcap_err = pcap_file_open("handshake_deauth", PCAP_CAPTURE_WIFI);
+    // Start Wireshark stream for EAPOL capture
+    int pcap_err = pcap_wireshark_start(PCAP_CAPTURE_WIFI);
     if (pcap_err != ESP_OK) {
-        glog("Warning: PCAP file failed to open, continuing without capture\n");
+        glog("Warning: Wireshark stream failed to start, continuing without capture\n");
     } else {
-        glog("PCAP capture enabled for handshake recording\n");
+        glog("Wireshark live streaming enabled for handshake recording\n");
     }
 
     // Build channel list for handshake deauth (user hop profile or the
@@ -814,7 +814,7 @@ void deauth_attack_start_handshake_deauth(void) {
         glog("Handshake+Deauth cancelled before start.\n");
         handshake_deauth_stop_requested = false;
         esp_wifi_set_promiscuous(false);
-        pcap_file_close();
+        pcap_wireshark_stop();
         esp_wifi_stop();
         (void)ap_manager_restore_after_attack("hs+deauth cancel");
         return;
@@ -827,7 +827,7 @@ void deauth_attack_start_handshake_deauth(void) {
         handshake_deauth_task_handle = NULL;
         handshake_deauth_stop_requested = false;
         esp_wifi_set_promiscuous(false);
-        pcap_file_close();
+        pcap_wireshark_stop();
         esp_wifi_stop();
         (void)ap_manager_restore_after_attack("hs+deauth start");
         return;
@@ -862,7 +862,7 @@ bool deauth_attack_stop_handshake_deauth(void) {
 
     // Stop promiscuous mode and close PCAP
     esp_wifi_set_promiscuous(false);
-    pcap_file_close();
+    pcap_wireshark_stop();
 
     handshake_deauth_task_running = false;
     handshake_deauth_stop_requested = false;
