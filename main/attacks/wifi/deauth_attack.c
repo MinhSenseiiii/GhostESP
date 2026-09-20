@@ -605,7 +605,7 @@ static void handshake_deauth_task(void *param) {
         return;
     }
 
-    glog("Sending deauth bursts, listening for handshakes...\n");
+    // glog("Sending deauth bursts, listening for handshakes...\n");
 
     uint32_t last_log = 0;
     uint32_t burst_count = 0;
