@@ -736,14 +736,6 @@ void deauth_attack_start_handshake_deauth(void) {
     esp_wifi_set_promiscuous(true);
     esp_wifi_set_promiscuous_rx_cb(wifi_eapol_scan_callback);
 
-    // Start Wireshark stream for EAPOL capture
-    int pcap_err = pcap_wireshark_start(PCAP_CAPTURE_WIFI);
-    if (pcap_err != ESP_OK) {
-        // glog("Warning: Wireshark stream failed to start, continuing without capture\n");
-    } else {
-        // glog("Wireshark live streaming enabled for handshake recording\n");
-    }
-
     // Build channel list for handshake deauth (user hop profile or the
     // country-appropriate default list).
     hop_profile_resolve(wireshark_channels, sizeof(wireshark_channels),
@@ -806,6 +798,14 @@ void deauth_attack_start_handshake_deauth(void) {
             status_display_show_attack("HS+Deauth", sanitized_ssid);
 #endif
         }
+    }
+
+    // Start Wireshark stream for EAPOL capture
+    int pcap_err = pcap_wireshark_start(PCAP_CAPTURE_WIFI);
+    if (pcap_err != ESP_OK) {
+        glog("Warning: Wireshark stream failed to start, continuing without capture\n");
+    } else {
+        // glog("Wireshark live streaming enabled for handshake recording\n");
     }
 
     handshake_deauth_handshake_count = 0;
