@@ -716,7 +716,7 @@ void settings_load(FSettings *settings) {
   if (err == ESP_OK) {
     settings->ap_enabled = (value_u8 != 0);
   } else {
-    settings->ap_enabled = true; // Default to enabled if not found
+    settings->ap_enabled = false; // Default to enabled if not found
   }
 
   err = nvs_get_u8(nvsHandle, NVS_POWER_SAVE_KEY, &value_u8);
