@@ -267,7 +267,7 @@ void settings_set_defaults(FSettings *settings) {
     settings->esp_comm_rx_pin = 7;
 #endif
   }
-  settings->ap_enabled = true; // Default to enabled
+  settings->ap_enabled = false; // Default to enabled
   settings->power_save_enabled = false;
   settings->zebra_menus_enabled = false; // or true if you want it enabled by default
   settings->max_screen_brightness = 100; // Default to 100% brightness
