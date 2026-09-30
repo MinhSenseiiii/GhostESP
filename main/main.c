@@ -955,34 +955,34 @@ void app_main(void) {
     ESP_LOGI(TAG, "Configuring WiFi STA from settings");
     MEASURE_INIT_RAM("WiFi STA Config", wifi_manager_configure_sta_from_settings());
 
-    ESP_LOGI(TAG, "Initializing Comm Manager");
-    {
-        int32_t comm_tx = G_Settings.esp_comm_tx_pin;
-        int32_t comm_rx = G_Settings.esp_comm_rx_pin;
-#ifdef CONFIG_BUILD_CONFIG_TEMPLATE
-        if (strcmp(CONFIG_BUILD_CONFIG_TEMPLATE, "NM-CYD-C5") == 0 &&
-            comm_tx == 6 && comm_rx == 7) {
-            comm_tx = 11;
-            comm_rx = 12;
-        } else if (strcmp(CONFIG_BUILD_CONFIG_TEMPLATE, "Pancake") == 0 ||
-                   strcmp(CONFIG_BUILD_CONFIG_TEMPLATE, "MarauderV8") == 0) {
-            comm_tx = UART_PIN_NO_CHANGE;
-            comm_rx = UART_PIN_NO_CHANGE;
-        }
-#endif
-#ifdef CONFIG_CROWPANEL_EPAPER_42
-        /* GPIO7 is the factory display-power enable, not a UART input. This
-         * board has no wired peer-comm header, so leave the optional manager
-         * off rather than stealing the display rail. */
-        comm_tx = UART_PIN_NO_CHANGE;
-        comm_rx = UART_PIN_NO_CHANGE;
-#endif
-        if (comm_tx != UART_PIN_NO_CHANGE || comm_rx != UART_PIN_NO_CHANGE) {
-            MEASURE_INIT_RAM("Comm Manager", esp_comm_manager_init((gpio_num_t)comm_tx, (gpio_num_t)comm_rx, DEFAULT_BAUD_RATE));
-        } else {
-            ESP_LOGI(TAG, "Comm Manager disabled for this build");
-        }
-    }
+//     ESP_LOGI(TAG, "Initializing Comm Manager");
+//     {
+//         int32_t comm_tx = G_Settings.esp_comm_tx_pin;
+//         int32_t comm_rx = G_Settings.esp_comm_rx_pin;
+// #ifdef CONFIG_BUILD_CONFIG_TEMPLATE
+//         if (strcmp(CONFIG_BUILD_CONFIG_TEMPLATE, "NM-CYD-C5") == 0 &&
+//             comm_tx == 6 && comm_rx == 7) {
+//             comm_tx = 11;
+//             comm_rx = 12;
+//         } else if (strcmp(CONFIG_BUILD_CONFIG_TEMPLATE, "Pancake") == 0 ||
+//                    strcmp(CONFIG_BUILD_CONFIG_TEMPLATE, "MarauderV8") == 0) {
+//             comm_tx = UART_PIN_NO_CHANGE;
+//             comm_rx = UART_PIN_NO_CHANGE;
+//         }
+// #endif
+// #ifdef CONFIG_CROWPANEL_EPAPER_42
+//         /* GPIO7 is the factory display-power enable, not a UART input. This
+//          * board has no wired peer-comm header, so leave the optional manager
+//          * off rather than stealing the display rail. */
+//         comm_tx = UART_PIN_NO_CHANGE;
+//         comm_rx = UART_PIN_NO_CHANGE;
+// #endif
+//         if (comm_tx != UART_PIN_NO_CHANGE || comm_rx != UART_PIN_NO_CHANGE) {
+//             MEASURE_INIT_RAM("Comm Manager", esp_comm_manager_init((gpio_num_t)comm_tx, (gpio_num_t)comm_rx, DEFAULT_BAUD_RATE));
+//         } else {
+//             ESP_LOGI(TAG, "Comm Manager disabled for this build");
+//         }
+//     }
 #if !defined(CONFIG_IDF_TARGET_ESP32S2)
     MEASURE_INIT_RAM("BLE Bridge restore", ble_bridge_apply_saved_enabled());
 #endif
