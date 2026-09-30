@@ -715,12 +715,12 @@ void handle_didyoumean_cmd(int argc, char **argv) {
 void handle_ps_cmd(int argc, char **argv) {
     (void)argc; (void)argv;
     glog("Tasks: %u, free heap: %u bytes\n", (unsigned)uxTaskGetNumberOfTasks(), (unsigned)esp_get_free_heap_size());
-#if configUSE_TRACE_FACILITY && configUSE_STATS_FORMATTING_FUNCTIONS
+// #if configUSE_TRACE_FACILITY && configUSE_STATS_FORMATTING_FUNCTIONS
     char tasks[1024] = {0};
     vTaskList(tasks);
     glog("Name            State  Prio Stack\n%s", tasks);
-#else
-    glog("Task details are disabled in this build.\n");
+// #else
+//     glog("Task details are disabled in this build.\n");
 #endif
 }
 
